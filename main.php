@@ -24,6 +24,7 @@ add_action('wp_enqueue_scripts', 'lastfm_enqueue_scripts');
 function lastfm_weekly_chart_form() {
     $html = '<div id="lastfm-weekly-chart">';
     $html .= '<input type="text" id="lastfm-username" placeholder="Enter Last.fm username" />';
+    $html .= '<input type="date" id="lastfm-date" />';
     $html .= '<button id="lastfm-search-btn">Get Weekly Chart List</button>';
     $html .= '<div id="lastfm-result"></div>';
     $html .= '</div>';
@@ -36,9 +37,15 @@ function get_weekly_chart_list() {
     if (!isset($_POST['username']) || empty($_POST['username'])) {
         wp_send_json_error('No username provided.');
     }
+    if (!isset($_POST['date']) || empty($_POST['date'])) {
+        wp_send_json_error('No date provided.');
+    }
 
     $username = sanitize_text_field($_POST['username']);
+    $date = sanitize_text_field($_POST['date']);
     $api_key = $GLOBALS['lastfm_api_key'];
+
+    $timestamp = strtotime($date);
 
     $url = "https://ws.audioscrobbler.com/2.0/?method=user.getweeklychartlist&user={$username}&api_key={$api_key}&format=json";
 
@@ -54,14 +61,42 @@ function get_weekly_chart_list() {
         wp_send_json_error('No weekly chart data found.');
     }
 
-    // Build HTML output
-    $output = '<ul>';
+    // Fetch weekly tracks
+    $week = null;
     foreach ($data['weeklychartlist']['chart'] as $chart) {
-        $from = date('Y-m-d', $chart['from']);
-        $to = date('Y-m-d', $chart['to']);
-        $output .= "<li>{$from} → {$to}</li>";
+        if ($timestamp >= $chart['from'] && $timestamp <= $chart['to']) {
+            $week = $chart;
+            break;
+        }
     }
-    $output .= '</ul>';
+
+    if (!$week) {
+        wp_send_json_error('No week found for the selected date.');
+    }
+
+    $from = $week['from'];
+    $to = $week['to'];
+    $url_tracks = "https://ws.audioscrobbler.com/2.0/?method=user.getweeklytrackchart&user={$username}&from={$from}&to={$to}&api_key={$api_key}&format=json";
+    $response_tracks = wp_remote_get($url_tracks);
+    if (is_wp_error($response_tracks)) {
+        wp_send_json_error('Error fetching weekly tracks: ' . $response_tracks->get_error_message());
+    }
+
+    $tracks_data = json_decode(wp_remote_retrieve_body($response_tracks), true);
+    if (empty($tracks_data['weeklytrackchart']['track'])) {
+        wp_send_json_error('No tracks found for this week.');
+    }
+
+    // Build HTML output
+    $output = "<h3>Top Tracks for Week " . date('Y-m-d', $from) . " → " . date('Y-m-d', $to) . "</h3>";
+    $output .= "<ol>";
+    foreach ($tracks_data['weeklytrackchart']['track'] as $track) {
+        $name = esc_html($track['name']);
+        $artist = esc_html($track['artist']['#text']);
+        $playcount = intval($track['playcount']);
+        $output .= "<li>{$name} by {$artist} ({$playcount} plays)</li>";
+    }
+    $output .= "</ol>";
 
     wp_send_json_success($output);
 }
