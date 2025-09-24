@@ -1,52 +1,71 @@
 <?php
 /*
-Plugin Name: Last.fm Top Tracks
-Description: Display your Last.fm top 10 artists and songs for the last 30 days (predefined username).
+Plugin Name: Last.fm Weekly Charts
+Description: Display weekly chart lists for a Last.fm username.
 Version: 1.0
-Author: Tyler Ricketts
+Author: Tyler
 */
 
 if (!defined('ABSPATH')) exit; // Exit if accessed directly
 
-// === Predefined Last.fm Username and API Key ===
-$lastfm_username = 'tylerjricketts'; // Replace with your Last.fm username
-$lastfm_api_key  = 'fd4bc04c5f3387f5b0b5f4f7bae504b9';  // Replace with your Last.fm API key
+$lastfm_api_key = 'fd4bc04c5f3387f5b0b5f4f7bae504b9'; // Replace with your key
 
-// === Shortcode Function ===
-function lastfm_top_shortcode() {
-    global $lastfm_username, $lastfm_api_key;
-
-    // Fetch top tracks
-    $response_tracks = wp_remote_get("http://ws.audioscrobbler.com/2.0/?method=user.gettoptracks&user={$lastfm_username}&period=1month&limit=10&api_key={$lastfm_api_key}&format=json");
-    if (is_wp_error($response_tracks)) return 'Error fetching top tracks.';
-    $tracks_data = json_decode(wp_remote_retrieve_body($response_tracks), true);
-
-    // Fetch top artists
-    $response_artists = wp_remote_get("http://ws.audioscrobbler.com/2.0/?method=user.gettopartists&user={$lastfm_username}&period=1month&limit=10&api_key={$lastfm_api_key}&format=json");
-    if (is_wp_error($response_artists)) return 'Error fetching top artists.';
-    $artists_data = json_decode(wp_remote_retrieve_body($response_artists), true);
-
-    // Build output
-    $output = '<h3>Top Artists (Last 30 days)</h3><ul>';
-    if (!empty($artists_data['topartists']['artist'])) {
-        foreach ($artists_data['topartists']['artist'] as $artist) {
-            $output .= '<li>' . esc_html($artist['name']) . ' (' . esc_html($artist['playcount']) . ' plays)</li>';
-        }
-    }
-    $output .= '</ul>';
-
-    $output .= '<h3>Top Tracks (Last 30 days)</h3><ul>';
-    if (!empty($tracks_data['toptracks']['track'])) {
-        foreach ($tracks_data['toptracks']['track'] as $track) {
-            $output .= '<li>' . esc_html($track['name']) . ' by ' . esc_html($track['artist']['name']) . ' (' . esc_html($track['playcount']) . ' plays)</li>';
-        }
-    }
-    $output .= '</ul>';
-
-    return $output;
+// === Enqueue JS for AJAX ===
+function lastfm_enqueue_scripts() {
+    wp_enqueue_script('lastfm-ajax', plugin_dir_url(__FILE__) . 'lastfm.js', array('jquery'), '1.0', true);
+    wp_localize_script('lastfm-ajax', 'lastfm_ajax_obj', array(
+        'ajax_url' => admin_url('admin-ajax.php'),
+        'api_key' => $GLOBALS['lastfm_api_key']
+    ));
 }
+add_action('wp_enqueue_scripts', 'lastfm_enqueue_scripts');
 
-// === Register Shortcode ===
-add_shortcode('lastfm_top', 'lastfm_top_shortcode');
+// === Shortcode to display search form and result container ===
+function lastfm_weekly_chart_form() {
+    $html = '<div id="lastfm-weekly-chart">';
+    $html .= '<input type="text" id="lastfm-username" placeholder="Enter Last.fm username" />';
+    $html .= '<button id="lastfm-search-btn">Get Weekly Chart List</button>';
+    $html .= '<div id="lastfm-result"></div>';
+    $html .= '</div>';
+    return $html;
+}
+add_shortcode('lastfm_weekly_chart', 'lastfm_weekly_chart_form');
+
+// === AJAX Handler Function ===
+function get_weekly_chart_list() {
+    if (!isset($_POST['username']) || empty($_POST['username'])) {
+        wp_send_json_error('No username provided.');
+    }
+
+    $username = sanitize_text_field($_POST['username']);
+    $api_key = $GLOBALS['lastfm_api_key'];
+
+    $url = "https://ws.audioscrobbler.com/2.0/?method=user.getweeklychartlist&user={$username}&api_key={$api_key}&format=json";
+
+    $response = wp_remote_get($url);
+
+    if (is_wp_error($response)) {
+        wp_send_json_error('Error fetching weekly chart list: ' . $response->get_error_message());
+    }
+
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+
+    if (empty($data['weeklychartlist']['chart'])) {
+        wp_send_json_error('No weekly chart data found.');
+    }
+
+    // Build HTML output
+    $output = '<ul>';
+    foreach ($data['weeklychartlist']['chart'] as $chart) {
+        $from = date('Y-m-d', $chart['from']);
+        $to = date('Y-m-d', $chart['to']);
+        $output .= "<li>{$from} → {$to}</li>";
+    }
+    $output .= '</ul>';
+
+    wp_send_json_success($output);
+}
+add_action('wp_ajax_get_weekly_chart_list', 'get_weekly_chart_list');
+add_action('wp_ajax_nopriv_get_weekly_chart_list', 'get_weekly_chart_list');
 
 ?>
